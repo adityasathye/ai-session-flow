@@ -69,7 +69,8 @@ function bootstrapRepo() {
 
   validateDependencies();
   const username = getGhUsername();
-  const repoRef = `${username}/ai-session-flow-backup`;
+  // repository name on GitHub uses a leading dot as required by user
+  const repoRef = `${username}/.ai-session-flow`;
 
   // attempt to create repository; ignore error if it already exists
   try {
