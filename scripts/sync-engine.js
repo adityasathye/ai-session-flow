@@ -57,29 +57,45 @@ function getGhUsername() {
 }
 
 function bootstrapRepo() {
-  ensureSyncDir();
-
+  // if the repo already exists locally, nothing to do
   if (fs.existsSync(path.join(SYNC_DIR, '.git'))) {
     return;
+  }
+
+  // remove any leftover directory (from prior failed attempt)
+  if (fs.existsSync(SYNC_DIR)) {
+    fs.rmSync(SYNC_DIR, { recursive: true, force: true });
   }
 
   validateDependencies();
   const username = getGhUsername();
   const repoRef = `${username}/ai-session-flow-backup`;
 
+  // attempt to create repository; ignore error if it already exists
   try {
-    run(`gh repo create ${repoRef} --private --clone ${SYNC_DIR}`);
-    logAudit('INFO', `Created and cloned private backup repository ${repoRef}.`);
-    return;
-  } catch {
-    try {
-      run(`gh repo clone ${repoRef} ${SYNC_DIR}`);
-      logAudit('INFO', `Cloned existing private backup repository ${repoRef}.`);
-      return;
-    } catch (error) {
-      logAudit('ERROR', `Bootstrap failed: ${error.message}`);
-      process.exit(1);
+    run(`gh repo create ${repoRef} --private`);
+    console.log(`INFO: Created private repository ${repoRef}.`);
+  } catch (err) {
+    console.log(`INFO: Create request failed (repo may already exist): ${err.message}`);
+    // in case logAudit wrote anything, remove it (unlikely now)
+    if (fs.existsSync(SYNC_DIR)) {
+      fs.rmSync(SYNC_DIR, { recursive: true, force: true });
     }
+  }
+
+  // now clone using git directly
+  if (fs.existsSync(SYNC_DIR)) {
+    const entries = fs.readdirSync(SYNC_DIR);
+    console.log(`INFO: SYNC_DIR already exists before clone; entries=${entries.join(',')}`);
+    // wipe again before clone
+    fs.rmSync(SYNC_DIR, { recursive: true, force: true });
+  }
+  try {
+    run(`git clone https://${GIT_HOST}/${repoRef}.git ${SYNC_DIR}`);
+    logAudit('INFO', `Cloned backup repository ${repoRef} into ${SYNC_DIR}.`);
+  } catch (cloneErr) {
+    logAudit('ERROR', `Bootstrap clone failed: ${cloneErr.message}`);
+    process.exit(1);
   }
 }
 
