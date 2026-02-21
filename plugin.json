@@ -1,0 +1,13 @@
+{
+  "name": "ai-session-flow",
+  "description": "Secure AI CLI session synchronizer with built-in Gitleaks secret scanning",
+  "version": "1.0.0",
+  "author": {
+    "name": "AI Session Flow Developer"
+  },
+  "agents": "agents/",
+  "skills": [
+    "skills/"
+  ],
+  "hooks": "hooks.json"
+}

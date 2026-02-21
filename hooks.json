@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionEnd": [
+      {
+        "command": "node ./scripts/sync-engine.js push",
+        "description": "Secure sync on session exit"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "node ./scripts/sync-engine.js push",
+        "description": "Secure sync after agent actions"
+      }
+    ]
+  }
+}
