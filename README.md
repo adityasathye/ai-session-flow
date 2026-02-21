@@ -9,6 +9,7 @@ AI Session Flow runs in the background, enforces local secret scanning, and keep
 - **Seamless Hot-Reloading:** Restore sessions and load context through AI file-reading tools.
 - **Universal Support:** Syncs GitHub Copilot CLI and Claude Code state paths.
 - **Security First:** Gitleaks blocks syncs when potential secrets are detected.
+- **Repo Naming:** Backups are pushed to a private GitHub repository named `.ai-session-flow` under your account.
 - **Debounced Concurrency:** Lock file prevents rapid concurrent Git operations.
 
 ## 🚀 Installation
