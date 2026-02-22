@@ -17,7 +17,13 @@ const SOURCES = [
 ];
 
 function run(command, options = {}) {
-  return execSync(command, { stdio: 'ignore', ...options });
+  console.log(`DEBUG: execute => ${command}`);
+  try {
+    return execSync(command, { stdio: 'inherit', ...options });
+  } catch (err) {
+    console.log(`DEBUG: command failed: ${command}`);
+    throw err;
+  }
 }
 
 function ensureSyncDir() {
