@@ -12,8 +12,10 @@ const LOCK_WINDOW_MS = 10_000;
 const SOURCES = [
   path.join(os.homedir(), '.config', 'github-copilot', 'sessions'),
   path.join(os.homedir(), '.copilot', 'sessions'),
+  path.join(os.homedir(), '.copilot', 'session-state'),
   path.join(os.homedir(), '.claude', 'projects'),
-  path.join(os.homedir(), '.claude', 'sessions')
+  path.join(os.homedir(), '.claude', 'sessions'),
+  path.join(os.homedir(), '.codex', 'sessions')
 ];
 
 function run(command, options = {}) {
