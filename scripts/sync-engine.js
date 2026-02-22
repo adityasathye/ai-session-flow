@@ -43,6 +43,23 @@ function logAudit(level, message) {
   }
 }
 
+function safeShellToken(s) {
+  if (typeof s !== 'string') throw new Error('Invalid shell token');
+  if (!/^[A-Za-z0-9._\/:-]+$/.test(s)) {
+    throw new Error(`Unsafe shell token: ${s}`);
+  }
+  return s;
+}
+
+function isPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function validateDependencies() {
   try {
     run('gh --version');
@@ -70,7 +87,15 @@ function bootstrapRepo() {
 
   // remove any leftover directory (from prior failed attempt)
   if (fs.existsSync(SYNC_DIR)) {
-    fs.rmSync(SYNC_DIR, { recursive: true, force: true });
+    // Move existing SYNC_DIR to a backup location instead of force-deleting
+    const backup = `${SYNC_DIR}.bak.${Date.now()}`;
+    try {
+      fs.renameSync(SYNC_DIR, backup);
+      logAudit('INFO', `Backed up existing SYNC_DIR to ${backup} instead of deleting`);
+    } catch (err) {
+      logAudit('ERROR', `Failed to backup existing SYNC_DIR: ${err.message}`);
+      throw err;
+    }
   }
 
   validateDependencies();
@@ -80,13 +105,20 @@ function bootstrapRepo() {
 
   // attempt to create repository; ignore error if it already exists
   try {
-    run(`gh repo create ${repoRef} --private`);
+    run(`gh repo create ${safeShellToken(repoRef)} --private`);
     console.log(`INFO: Created private repository ${repoRef}.`);
   } catch (err) {
     console.log(`INFO: Create request failed (repo may already exist): ${err.message}`);
-    // in case logAudit wrote anything, remove it (unlikely now)
+    // in case logAudit wrote anything, move existing SYNC_DIR to a backup (avoid data loss)
     if (fs.existsSync(SYNC_DIR)) {
-      fs.rmSync(SYNC_DIR, { recursive: true, force: true });
+      const backup = `${SYNC_DIR}.bak.${Date.now()}`;
+      try {
+        fs.renameSync(SYNC_DIR, backup);
+        logAudit('INFO', `Backed up existing SYNC_DIR to ${backup} after failed create attempt`);
+      } catch (err2) {
+        logAudit('ERROR', `Failed to backup SYNC_DIR after create failure: ${err2.message}`);
+        throw err2;
+      }
     }
   }
 
@@ -94,11 +126,18 @@ function bootstrapRepo() {
   if (fs.existsSync(SYNC_DIR)) {
     const entries = fs.readdirSync(SYNC_DIR);
     console.log(`INFO: SYNC_DIR already exists before clone; entries=${entries.join(',')}`);
-    // wipe again before clone
-    fs.rmSync(SYNC_DIR, { recursive: true, force: true });
+    // move aside before clone to avoid destructive deletion
+    const backup = `${SYNC_DIR}.bak.${Date.now()}`;
+    try {
+      fs.renameSync(SYNC_DIR, backup);
+      logAudit('INFO', `Moved existing SYNC_DIR to ${backup} before clone`);
+    } catch (err) {
+      logAudit('ERROR', `Failed to move existing SYNC_DIR before clone: ${err.message}`);
+      throw err;
+    }
   }
   try {
-    run(`git clone https://${GIT_HOST}/${repoRef}.git ${SYNC_DIR}`);
+    run(`git clone https://${safeShellToken(GIT_HOST)}/${safeShellToken(repoRef)}.git ${safeShellToken(SYNC_DIR)}`);
     logAudit('INFO', `Cloned backup repository ${repoRef} into ${SYNC_DIR}.`);
   } catch (cloneErr) {
     logAudit('ERROR', `Bootstrap clone failed: ${cloneErr.message}`);
@@ -107,13 +146,22 @@ function bootstrapRepo() {
 }
 
 function mapSourceToDest(sourcePath) {
-  const rel = path.relative(os.homedir(), sourcePath).replace(/[\\/]+/g, '__');
-  return path.join(SYNC_DIR, rel);
+  const rel = path.relative(os.homedir(), sourcePath);
+  if (rel.startsWith('..')) {
+    throw new Error(`Source path ${sourcePath} is outside home directory and will not be synced`);
+  }
+  const safeRel = rel.replace(/[\\/]+/g, '__');
+  if (!safeRel) return SYNC_DIR;
+  return path.join(SYNC_DIR, safeRel);
 }
 
 function copyRecursive(src, dest) {
-  const stats = fs.statSync(src);
-  if (stats.isDirectory()) {
+  const lst = fs.lstatSync(src);
+  if (lst.isSymbolicLink()) {
+    logAudit('INFO', `Skipping symbolic link during copy: ${src}`);
+    return;
+  }
+  if (lst.isDirectory()) {
     if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
     for (const entry of fs.readdirSync(src)) {
       copyRecursive(path.join(src, entry), path.join(dest, entry));
@@ -121,7 +169,13 @@ function copyRecursive(src, dest) {
     return;
   }
 
-  if (stats.isFile()) {
+  if (lst.isFile()) {
+    // ensure dest is within SYNC_DIR
+    const resolvedDest = path.resolve(dest);
+    if (!resolvedDest.startsWith(path.resolve(SYNC_DIR) + path.sep) && resolvedDest !== path.resolve(SYNC_DIR)) {
+      logAudit('ERROR', `Refusing to copy ${src} to destination outside SYNC_DIR: ${dest}`);
+      return;
+    }
     fs.copyFileSync(src, dest);
   }
 }
@@ -157,7 +211,13 @@ function runSecurityGate() {
     for (const source of SOURCES) {
       const destRoot = mapSourceToDest(source);
       if (fs.existsSync(destRoot)) {
-        fs.rmSync(destRoot, { recursive: true, force: true });
+        const backup = `${destRoot}.bak.${Date.now()}`;
+        try {
+          fs.renameSync(destRoot, backup);
+          logAudit('INFO', `Moved destRoot ${destRoot} to backup ${backup} after security block`);
+        } catch (err) {
+          logAudit('ERROR', `Failed to backup destRoot ${destRoot}: ${err.message}`);
+        }
       }
     }
 
@@ -196,6 +256,11 @@ function shouldDebounce() {
   if (!fs.existsSync(LOCK_FILE)) return false;
 
   try {
+    const data = fs.readFileSync(LOCK_FILE, 'utf8');
+    const obj = JSON.parse(data);
+    if (obj && obj.pid && isPidAlive(obj.pid)) {
+      return true;
+    }
     const stats = fs.statSync(LOCK_FILE);
     return Date.now() - stats.mtimeMs < LOCK_WINDOW_MS;
   } catch {
@@ -205,7 +270,17 @@ function shouldDebounce() {
 
 function scheduleDaemon() {
   ensureSyncDir();
-  fs.writeFileSync(LOCK_FILE, JSON.stringify({ ts: new Date().toISOString(), pid: process.pid }), 'utf8');
+  try {
+    const fd = fs.openSync(LOCK_FILE, 'wx', 0o600);
+    fs.writeSync(fd, JSON.stringify({ ts: new Date().toISOString(), pid: process.pid }), null, 'utf8');
+    fs.closeSync(fd);
+  } catch (err) {
+    if (err.code === 'EEXIST') {
+      logAudit('INFO', 'Lock file exists; another daemon may be running.');
+      return;
+    }
+    throw err;
+  }
 
   const child = spawn(process.execPath, [__filename, 'push', '--daemon'], {
     detached: true,
@@ -234,6 +309,12 @@ function handlePush() {
     syncToRemote();
   } catch (error) {
     logAudit('ERROR', `Daemon push failed: ${error.message}`);
+  } finally {
+    try {
+      if (fs.existsSync(LOCK_FILE)) fs.unlinkSync(LOCK_FILE);
+    } catch (err) {
+      logAudit('ERROR', `Failed to remove lock file: ${err.message}`);
+    }
   }
 }
 
@@ -257,11 +338,24 @@ function handleClean() {
 
       for (const entry of fs.readdirSync(source)) {
         const entryPath = path.join(source, entry);
-        const stats = fs.statSync(entryPath);
-        if (stats.isDirectory()) {
-          fs.rmSync(entryPath, { recursive: true, force: true });
-        } else if (stats.isFile()) {
-          fs.unlinkSync(entryPath);
+        try {
+          const lst = fs.lstatSync(entryPath);
+          if (lst.isSymbolicLink()) {
+            logAudit('INFO', `Skipping symbolic link during clean: ${entryPath}`);
+            continue;
+          }
+          const real = fs.realpathSync(entryPath);
+          if (!real.startsWith(path.resolve(source) + path.sep) && real !== path.resolve(source)) {
+            logAudit('ERROR', `Skipping cleanup of ${entryPath} because it resolves outside source`);
+            continue;
+          }
+          if (lst.isDirectory()) {
+            fs.rmSync(entryPath, { recursive: true, force: true });
+          } else if (lst.isFile()) {
+            fs.unlinkSync(entryPath);
+          }
+        } catch (err) {
+          logAudit('ERROR', `Error checking/removing ${entryPath}: ${err.message}`);
         }
       }
     }
